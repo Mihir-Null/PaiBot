@@ -129,6 +129,33 @@ class ExecToolConfig(Base):
     timeout: int = 60
     path_append: str = ""
 
+
+class MemoryIndexEmbeddingConfig(Base):
+    """Embedding provider config for the memory index."""
+
+    provider: str = "ollama"
+    model: str = "nomic-embed-text"
+    base_url: str = "http://localhost:11434"
+    batch_size: int = 16
+    dim: int = 768  # must match model output dimension
+
+
+class MemoryIndexQueryConfig(Base):
+    """Search and ranking config for the memory index."""
+
+    top_k: int = 5
+    mmr_lambda: float = 0.5
+    temporal_decay_half_life_days: float = 90.0
+
+
+class MemoryIndexConfig(Base):
+    """Semantic memory index configuration. Off by default."""
+
+    enabled: bool = False
+    embedding: MemoryIndexEmbeddingConfig = Field(default_factory=MemoryIndexEmbeddingConfig)
+    query: MemoryIndexQueryConfig = Field(default_factory=MemoryIndexQueryConfig)
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -158,6 +185,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    memory_index: MemoryIndexConfig = Field(default_factory=MemoryIndexConfig)
 
     @property
     def workspace_path(self) -> Path:
