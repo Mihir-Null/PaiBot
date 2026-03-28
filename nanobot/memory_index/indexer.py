@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,3 +185,90 @@ def _split_section(text: str, base_line: int, created_at: float) -> list[Chunk]:
 
 def _parse_ts(ts_str: str) -> float:
     return datetime.strptime(ts_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()
+
+
+def write_chunks(
+    db_path: Path,
+    file_path: Path,
+    mtime: float,
+    size: int,
+    hash_: str,
+    chunks: list[Chunk],
+    embeddings: list[list[float]] | None,
+    vec_available: bool,
+) -> None:
+    """Write (or replace) chunks for one file in the SQLite index."""
+    conn = sqlite3.connect(db_path)
+    if vec_available:
+        try:
+            import sqlite_vec
+
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+        except Exception:
+            vec_available = False
+
+    try:
+        # Remove existing records for this file (cascade removes chunks)
+        old_row = conn.execute("SELECT id FROM files WHERE path = ?", [str(file_path)]).fetchone()
+        if old_row:
+            old_ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM chunks WHERE file_id = ?", [old_row[0]]
+                ).fetchall()
+            ]
+            for cid in old_ids:
+                conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", [cid])
+                if vec_available:
+                    try:
+                        conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", [cid])
+                    except Exception:
+                        pass
+            conn.execute("DELETE FROM chunks WHERE file_id = ?", [old_row[0]])
+            conn.execute("DELETE FROM files WHERE id = ?", [old_row[0]])
+
+        # Insert new file record
+        cur = conn.execute(
+            "INSERT INTO files(path, mtime, size, hash) VALUES (?, ?, ?, ?)",
+            [str(file_path), mtime, size, hash_],
+        )
+        file_id = cur.lastrowid
+
+        for i, chunk in enumerate(chunks):
+            emb_bytes = None
+            if embeddings and i < len(embeddings):
+                vec = embeddings[i]
+                emb_bytes = struct.pack(f"{len(vec)}f", *vec)
+
+            cur = conn.execute(
+                "INSERT INTO chunks(file_id, text, start_line, end_line, created_at, embedding)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    file_id,
+                    chunk.text,
+                    chunk.start_line,
+                    chunk.end_line,
+                    chunk.created_at,
+                    emb_bytes,
+                ],
+            )
+            chunk_id = cur.lastrowid
+
+            conn.execute(
+                "INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)", [chunk_id, chunk.text]
+            )
+
+            if vec_available and emb_bytes:
+                try:
+                    conn.execute(
+                        "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+                        [chunk_id, emb_bytes],
+                    )
+                except Exception:
+                    pass
+
+        conn.commit()
+    finally:
+        conn.close()
