@@ -152,6 +152,9 @@ def _split_section(text: str, base_line: int, created_at: float) -> list[Chunk]:
             overlap_text = (
                 chunk_text[-(OVERLAP_TOKENS * TOKEN_ESTIMATE_RATIO) :] if chunk_text else ""
             )
+            # Snap overlap to a line boundary so line counting is accurate
+            if overlap_text and "\n" in overlap_text:
+                overlap_text = overlap_text[overlap_text.index("\n") + 1 :]
             overlap_lines = overlap_text.count("\n") + 1 if overlap_text.strip() else 0
             # Advance by the chunk's lines, then step back by overlap so next chunk's
             # start_line reflects that it begins with repeated content from the previous chunk.
