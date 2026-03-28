@@ -35,10 +35,9 @@ class MemoryIndex:
     def _check_vec_available(self) -> None:
         """Check once at init whether sqlite-vec can be loaded."""
         try:
-            import sqlite_vec  # noqa: F401
+            import sqlite_vec as sv
             conn = sqlite3.connect(":memory:")
             conn.enable_load_extension(True)
-            import sqlite_vec as sv
             sv.load(conn)
             conn.close()
             self._vec_available = True
@@ -67,6 +66,7 @@ class MemoryIndex:
         conn = self._open_conn()
         try:
             conn.executescript(schema_sql)
+            # executescript issues an implicit COMMIT; subsequent inserts start a new transaction
             if self._vec_available:
                 conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec "
