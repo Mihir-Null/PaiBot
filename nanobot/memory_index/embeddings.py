@@ -36,7 +36,10 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             json={"model": self.model, "prompt": text},
         )
         r.raise_for_status()
-        return r.json()["embedding"]
+        data = r.json()
+        if "embedding" not in data:
+            raise EmbeddingUnavailableError(f"Ollama response missing 'embedding' key: {data}")
+        return data["embedding"]
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Return one embedding per text. Uses in-memory cache to avoid re-embedding."""
