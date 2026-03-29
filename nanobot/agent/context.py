@@ -165,8 +165,8 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
             {"role": current_role, "content": merged},
         ]
 
-        if index is not None and index._cfg.inject_top_k > 0:
-            results = await index.index.search(current_message, top_k=index._cfg.inject_top_k)
+        if index is not None and index.inject_top_k > 0:
+            results = await index.search(current_message, top_k=index.inject_top_k)
             if results:
                 injection = "Relevant memory:\n\n" + "\n\n---\n\n".join(
                     f"[{r.source} L{r.start_line}–{r.end_line}]\n{r.text}" for r in results
