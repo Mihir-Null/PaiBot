@@ -37,7 +37,7 @@ if TYPE_CHECKING:
         WebSearchConfig,
     )
     from nanobot.cron.service import CronService
-    from nanobot.memory_index import MemoryIndex
+    from nanobot.memory_index.service import IndexService
 
 
 class AgentLoop:
@@ -110,7 +110,8 @@ class AgentLoop:
         )
 
         self._running = False
-        self._memory_index: MemoryIndex | None = None
+        self._index_service: IndexService | None = None
+        self._index_service_started: bool = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
@@ -167,11 +168,11 @@ class AgentLoop:
             )
         if self.memory_index_config and self.memory_index_config.enabled:
             from nanobot.agent.tools.memory_search import MemorySearchTool
-            from nanobot.memory_index import MemoryIndex
+            from nanobot.memory_index.service import IndexService
 
-            self._memory_index = MemoryIndex(self.workspace, self.memory_index_config)
-            self.tools.register(MemorySearchTool(self._memory_index))
-            # startup_index() is scheduled in run()/process_direct() once the event loop is running
+            self._index_service = IndexService(self.workspace, self.memory_index_config)
+            self.tools.register(MemorySearchTool(self._index_service.index))
+            # start() is scheduled in run()/process_direct() once the event loop is running
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -367,9 +368,12 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
-        if self._memory_index is not None:
-            self._schedule_background(self._memory_index.startup_index())
-            self._memory_index = None  # only schedule once
+        if self._index_service is not None and not self._index_service_started:
+            # Safe without a lock: asyncio is single-threaded; the flag is set
+            # synchronously before the first await, so concurrent coroutines
+            # see it immediately and skip the duplicate schedule.
+            self._index_service_started = True
+            self._schedule_background(self._index_service.start())
         await self._connect_mcp()
         logger.info("Agent loop started")
 
@@ -464,10 +468,12 @@ class AgentLoop:
                 )
 
     async def close_mcp(self) -> None:
-        """Drain pending background archives, then close MCP connections."""
+        """Drain pending background tasks, stop file watcher, then close MCP connections."""
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
+        if self._index_service is not None:
+            await self._index_service.stop()
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
@@ -507,12 +513,13 @@ class AgentLoop:
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
-            messages = self.context.build_messages(
+            messages = await self.context.build_messages(
                 history=history,
                 current_message=msg.content,
                 channel=channel,
                 chat_id=chat_id,
                 current_role=current_role,
+                index=self._index_service,
             )
             final_content, _, all_msgs = await self._run_agent_loop(
                 messages,
@@ -549,12 +556,13 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
-        initial_messages = self.context.build_messages(
+        initial_messages = await self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            index=self._index_service,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
@@ -695,9 +703,10 @@ class AgentLoop:
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
-        if self._memory_index is not None:
-            self._schedule_background(self._memory_index.startup_index())
-            self._memory_index = None  # only schedule once
+        if self._index_service is not None and not self._index_service_started:
+            # Same single-threaded asyncio safety as in run() — see comment there.
+            self._index_service_started = True
+            self._schedule_background(self._index_service.start())
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
         return await self._process_message(

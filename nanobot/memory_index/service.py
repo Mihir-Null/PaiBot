@@ -9,6 +9,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from nanobot.config.schema import MemoryIndexConfig
+    from nanobot.memory_index.search import SearchResult
 
 
 class IndexService:
@@ -33,6 +34,19 @@ class IndexService:
             self._observer.stop()
             self._observer.join()
             self._observer = None
+
+    @property
+    def inject_top_k(self) -> int:
+        """Number of memory chunks to inject per turn (0 = disabled)."""
+        return self._cfg.inject_top_k
+
+    async def search(self, query: str, top_k: int | None = None) -> list[SearchResult]:
+        """Public search entry-point; delegates to MemoryIndex.
+
+        Keeping search on the service boundary (rather than exposing index.search directly)
+        allows future additions — caching, reindex guards, metrics — in one place.
+        """
+        return await self.index.search(query, top_k=top_k)
 
     def _start_watcher(self) -> None:
         """Start a watchdog observer that re-indexes on MEMORY.md / HISTORY.md changes."""

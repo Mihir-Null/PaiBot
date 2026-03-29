@@ -15,8 +15,8 @@ async def test_build_messages_injects_results_when_index_provided(tmp_path):
     ctx = ContextBuilder(tmp_path, memory_index_enabled=True)
 
     mock_service = MagicMock()
-    mock_service._cfg.inject_top_k = 3
-    mock_service.index.search = AsyncMock(return_value=[_make_result("User prefers dark mode.")])
+    mock_service.inject_top_k = 3
+    mock_service.search = AsyncMock(return_value=[_make_result("User prefers dark mode.")])
 
     messages = await ctx.build_messages(
         history=[],
@@ -35,8 +35,8 @@ async def test_injection_message_is_inserted_before_user_message(tmp_path):
     ctx = ContextBuilder(tmp_path, memory_index_enabled=True)
 
     mock_service = MagicMock()
-    mock_service._cfg.inject_top_k = 3
-    mock_service.index.search = AsyncMock(return_value=[_make_result("Some fact.")])
+    mock_service.inject_top_k = 3
+    mock_service.search = AsyncMock(return_value=[_make_result("Some fact.")])
 
     messages = await ctx.build_messages(
         history=[],
@@ -65,8 +65,8 @@ async def test_injection_includes_source_and_line_range(tmp_path):
         score=0.8,
     )
     mock_service = MagicMock()
-    mock_service._cfg.inject_top_k = 3
-    mock_service.index.search = AsyncMock(return_value=[result])
+    mock_service.inject_top_k = 3
+    mock_service.search = AsyncMock(return_value=[result])
 
     messages = await ctx.build_messages(
         history=[],
@@ -100,8 +100,8 @@ async def test_no_injection_when_empty_results(tmp_path):
     ctx = ContextBuilder(tmp_path, memory_index_enabled=True)
 
     mock_service = MagicMock()
-    mock_service._cfg.inject_top_k = 3
-    mock_service.index.search = AsyncMock(return_value=[])
+    mock_service.inject_top_k = 3
+    mock_service.search = AsyncMock(return_value=[])
 
     messages = await ctx.build_messages(
         history=[],
@@ -119,8 +119,8 @@ async def test_no_injection_when_inject_top_k_is_zero(tmp_path):
     ctx = ContextBuilder(tmp_path, memory_index_enabled=True)
 
     mock_service = MagicMock()
-    mock_service._cfg.inject_top_k = 0
-    mock_service.index.search = AsyncMock(return_value=[_make_result("Should not appear.")])
+    mock_service.inject_top_k = 0
+    mock_service.search = AsyncMock(return_value=[_make_result("Should not appear.")])
 
     messages = await ctx.build_messages(
         history=[],
@@ -128,7 +128,7 @@ async def test_no_injection_when_inject_top_k_is_zero(tmp_path):
         index=mock_service,
     )
 
-    mock_service.index.search.assert_not_called()
+    mock_service.search.assert_not_called()
     injected = [m for m in messages if m["role"] == "system" and "Relevant memory" in m.get("content", "")]
     assert len(injected) == 0
 
