@@ -169,8 +169,10 @@ class MemoryIndexConfig(Base):
     enabled: bool = False
     embedding: MemoryIndexEmbeddingConfig = Field(default_factory=MemoryIndexEmbeddingConfig)
     query: MemoryIndexQueryConfig = Field(default_factory=MemoryIndexQueryConfig)
-    inject_top_k: int = 3       # chunks auto-injected per turn; 0 = disabled
-    watch_files: bool = True    # enable watchdog file watcher
+    inject_top_k: int = 3        # chunks auto-injected per turn; 0 = disabled
+    watch_files: bool = True     # enable watchdog file watcher
+    backend: Literal["sqlite", "qmd"] = "sqlite"  # search backend
+    qmd_binary: str = "qmd"      # path or name resolved via shutil.which
 
 
 class MCPServerConfig(Base):
