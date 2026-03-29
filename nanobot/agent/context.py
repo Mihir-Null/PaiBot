@@ -1,14 +1,19 @@
 """Context builder for assembling agent prompts."""
 
+from __future__ import annotations
+
 import base64
 import mimetypes
 import platform
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
+
+if TYPE_CHECKING:
+    from nanobot.memory_index.service import IndexService
 
 
 class ContextBuilder:
@@ -132,7 +137,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
 
         return "\n\n".join(parts) if parts else ""
 
-    def build_messages(
+    async def build_messages(
         self,
         history: list[dict[str, Any]],
         current_message: str,
@@ -141,6 +146,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         channel: str | None = None,
         chat_id: str | None = None,
         current_role: str = "user",
+        index: IndexService | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
@@ -153,11 +159,21 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
-        return [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt(skill_names)},
             *history,
             {"role": current_role, "content": merged},
         ]
+
+        if index is not None and index._cfg.inject_top_k > 0:
+            results = await index.index.search(current_message, top_k=index._cfg.inject_top_k)
+            if results:
+                injection = "Relevant memory:\n\n" + "\n\n---\n\n".join(
+                    f"[{r.source} L{r.start_line}–{r.end_line}]\n{r.text}" for r in results
+                )
+                messages.insert(-1, {"role": "system", "content": injection})
+
+        return messages
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""
