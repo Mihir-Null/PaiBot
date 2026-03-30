@@ -12,8 +12,10 @@ from pydantic import Field
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
+from nanobot.channels.discord_ui import McpView, ModelPickerView, StatusView
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
+from nanobot.providers.registry import PROVIDERS
 from nanobot.utils.helpers import split_message
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
@@ -58,6 +60,7 @@ class DiscordChannel(BaseChannel):
         self._bot_user_id: str | None = None
         self._tree: discord.app_commands.CommandTree | None = None
         self._pending_interactions: dict[str, discord.Interaction] = {}
+        self._attach_stop_button: set[str] = set()
 
     async def start(self) -> None:
         """Start the Discord client."""
@@ -88,9 +91,97 @@ class DiscordChannel(BaseChannel):
             async def slash_status(interaction: discord.Interaction) -> None:
                 await self._inject_slash_as_message(interaction, "/status")
 
-            @self._tree.command(name="help", description="Show help information")
+            @self._tree.command(name="help", description="Show available commands")
             async def slash_help(interaction: discord.Interaction) -> None:
-                await self._inject_slash_as_message(interaction, "/help")
+                embed = discord.Embed(title="nanobot Commands", color=discord.Color.blurple())
+                embed.add_field(name="/stop", value="Stop the current agent task", inline=False)
+                embed.add_field(name="/restart", value="Restart the bot process", inline=False)
+                embed.add_field(name="/new", value="Start a new conversation session", inline=False)
+                embed.add_field(name="/status", value="Show bot status", inline=False)
+                embed.add_field(name="/model [model]", value="View or change the LLM model", inline=False)
+                embed.add_field(name="/config", value="View Discord channel configuration (admin)", inline=False)
+                embed.add_field(name="/mcp", value="List registered MCP servers (admin)", inline=False)
+                await interaction.response.send_message(embed=embed, ephemeral=self.config.ephemeral_commands)
+
+            @self._tree.command(name="model", description="View or change the LLM model")
+            @discord.app_commands.describe(model="Model name (e.g. claude-opus-4-6)")
+            async def slash_model(interaction: discord.Interaction, model: str | None = None) -> None:
+                if model:
+                    await self._inject_slash_as_message(interaction, f"/model {model}")
+                    return
+                providers = [(spec.name, spec.label) for spec in PROVIDERS][:20]
+
+                async def on_model_confirm(provider: str, model_name: str) -> None:
+                    pass  # Phase 6 can wire to config update; UI confirmation shown by ModelModal itself
+
+                view = ModelPickerView(providers=providers, on_confirm=on_model_confirm)
+                embed = discord.Embed(
+                    title="Model Picker",
+                    description="Select a provider then click **Set Model** to enter a model name.",
+                    color=discord.Color.blurple(),
+                )
+                await interaction.response.send_message(
+                    embed=embed, view=view, ephemeral=self.config.ephemeral_commands
+                )
+
+            @slash_model.autocomplete("model")
+            async def model_autocomplete(
+                interaction: discord.Interaction, current: str
+            ) -> list[discord.app_commands.Choice[str]]:
+                suggestions = [
+                    "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+                    "gpt-4o", "gpt-4o-mini",
+                    "gemini-2.5-pro", "gemini-2.0-flash",
+                    "deepseek-chat", "deepseek-reasoner",
+                ]
+                filtered = [s for s in suggestions if current.lower() in s.lower()][:25]
+                return [discord.app_commands.Choice(name=s, value=s) for s in filtered]
+
+            @self._tree.command(name="config", description="View Discord channel configuration")
+            async def slash_config(interaction: discord.Interaction) -> None:
+                if self.config.admin_role_ids:
+                    member_roles = [
+                        str(r.id)
+                        for r in (interaction.user.roles if hasattr(interaction.user, "roles") else [])
+                    ]
+                    if not any(r in member_roles for r in self.config.admin_role_ids):
+                        await interaction.response.send_message("Admin access required.", ephemeral=True)
+                        return
+                embed = discord.Embed(title="Discord Channel Config", color=discord.Color.blue())
+                embed.add_field(name="group_policy", value=self.config.group_policy, inline=True)
+                embed.add_field(name="slash_commands_enabled", value=str(self.config.slash_commands_enabled), inline=True)
+                embed.add_field(name="ephemeral_commands", value=str(self.config.ephemeral_commands), inline=True)
+                embed.add_field(name="threads_per_conversation", value=str(self.config.threads_per_conversation), inline=True)
+                embed.add_field(name="guild_ids", value=", ".join(self.config.guild_ids) or "(global)", inline=True)
+                embed.add_field(name="admin_role_ids", value=", ".join(self.config.admin_role_ids) or "(none)", inline=True)
+                await interaction.response.send_message(embed=embed, ephemeral=self.config.ephemeral_commands)
+
+            @self._tree.command(name="mcp", description="List registered MCP servers")
+            async def slash_mcp(interaction: discord.Interaction) -> None:
+                if self.config.admin_role_ids:
+                    member_roles = [
+                        str(r.id)
+                        for r in (interaction.user.roles if hasattr(interaction.user, "roles") else [])
+                    ]
+                    if not any(r in member_roles for r in self.config.admin_role_ids):
+                        await interaction.response.send_message("Admin access required.", ephemeral=True)
+                        return
+                mcp_servers: list[str] = []
+                try:
+                    from nanobot.config.loader import load_config  # noqa: PLC0415
+                    cfg = load_config()
+                    if hasattr(cfg, "mcp") and cfg.mcp:
+                        mcp_servers = list(cfg.mcp.keys())
+                except Exception:
+                    pass
+                view = McpView(mcp_servers)
+                embed = discord.Embed(title="MCP Servers", color=discord.Color.green())
+                if mcp_servers:
+                    for name in mcp_servers:
+                        embed.add_field(name=name, value="registered", inline=True)
+                else:
+                    embed.description = "No MCP servers configured."
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=self.config.ephemeral_commands)
 
         @self._client.event
         async def on_ready() -> None:
@@ -125,6 +216,7 @@ class DiscordChannel(BaseChannel):
             await asyncio.gather(*self._typing_tasks.values(), return_exceptions=True)
         self._typing_tasks.clear()
         self._pending_interactions.clear()
+        self._attach_stop_button.clear()
         if self._client:
             await self._client.close()
             self._client = None
@@ -134,6 +226,8 @@ class DiscordChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message via discord.py, including file attachments."""
+        attach_stop = msg.chat_id in self._attach_stop_button
+        self._attach_stop_button.discard(msg.chat_id)
         interaction = self._pending_interactions.pop(msg.chat_id, None)
 
         if not self._client:
@@ -210,10 +304,26 @@ class DiscordChannel(BaseChannel):
                                 channel_id=int(msg.chat_id),
                                 fail_if_not_exists=False,
                             )
+                        view: discord.ui.View | None = None
+                        if i == 0 and attach_stop:
+                            chat_id_capture = msg.chat_id
+
+                            async def _stop_cb() -> None:
+                                from nanobot.bus.events import InboundMessage  # noqa: PLC0415
+                                await self.bus.publish_inbound(InboundMessage(
+                                    channel=self.name,
+                                    sender_id="",
+                                    chat_id=chat_id_capture,
+                                    content="/stop",
+                                    metadata={"message_id": "", "guild_id": None, "reply_to": None},
+                                ))
+
+                            view = StatusView(on_stop=_stop_cb)
                         await channel.send(
                             content=chunk,
                             reference=reference,
                             mention_author=False,
+                            view=view,
                         )
                 except Exception as e:
                     logger.error("Error sending Discord message: {}", e)
@@ -312,6 +422,7 @@ class DiscordChannel(BaseChannel):
                 "reply_to": reply_to,
             },
         )
+        self._attach_stop_button.add(channel_id)
 
     def _should_respond_in_group(self, message: discord.Message, content: str) -> bool:
         """Check if bot should respond in a group channel based on policy."""
