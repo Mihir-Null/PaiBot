@@ -361,7 +361,6 @@ async def test_thread_per_conversation_creates_thread_for_guild_message():
     message.author.display_name = "TestUser"
     message.channel = MagicMock(spec=discord.TextChannel)  # NOT a Thread
     message.channel.id = 456
-    message.channel.typing = MagicMock(return_value=AsyncMock().__aenter__.return_value)
     message.channel.typing.return_value.__aenter__ = AsyncMock(return_value=None)
     message.channel.typing.return_value.__aexit__ = AsyncMock(return_value=None)
     message.guild.id = 789

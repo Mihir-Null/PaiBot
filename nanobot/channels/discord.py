@@ -396,18 +396,20 @@ class DiscordChannel(BaseChannel):
 
         # Thread-per-conversation: create a thread for each new conversation in a text channel
         thread_id: str | None = None
+        created_thread: discord.Thread | None = None
         if self.config.threads_per_conversation and guild_id is not None:
             # Don't create a thread if we're already in one (message.channel is a Thread)
             if not isinstance(message.channel, discord.Thread):
-                # Reuse existing thread for this channel if we have one
+                # Note: thread reuse is per-channel (one thread per text channel), not per-user.
+                # All users sending in the same channel share one conversation thread.
                 if channel_id in self._thread_map:
                     thread_id = self._thread_map[channel_id]
                 else:
                     try:
-                        thread = await message.create_thread(
+                        created_thread = await message.create_thread(
                             name=f"Chat with {message.author.display_name}"[:100]
                         )
-                        thread_id = str(thread.id)
+                        thread_id = str(created_thread.id)
                         self._thread_map[channel_id] = thread_id
                         logger.info("Discord: created thread {} for channel {}", thread_id, channel_id)
                     except Exception as e:
@@ -449,9 +451,14 @@ class DiscordChannel(BaseChannel):
 
         typing_target = message.channel
         if thread_id:
-            thread_channel = self._client.get_channel(int(thread_id)) if self._client else None
-            if thread_channel:
-                typing_target = thread_channel
+            if created_thread is not None:
+                # Use the newly-created thread object directly (get_channel may not have it cached yet)
+                typing_target = created_thread
+            else:
+                # Reusing an existing thread — try the cache
+                thread_channel = self._client.get_channel(int(thread_id)) if self._client else None
+                if thread_channel:
+                    typing_target = thread_channel
         await self._start_typing(typing_target)
 
         self._attach_stop_button.add(effective_chat_id)
