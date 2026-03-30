@@ -33,6 +33,7 @@ from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
+    from nanobot.agent.memory import MemoryBackend
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
     from nanobot.cron.service import CronService
 
@@ -68,6 +69,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
+        memory_backend: "MemoryBackend | None" = None,  # NEW
     ):
         from nanobot.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -86,7 +88,11 @@ class AgentLoop:
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
 
-        self.context = ContextBuilder(workspace, timezone=timezone)
+        from nanobot.agent.memory import MemoryStore
+        self.memory_backend = memory_backend if memory_backend is not None else MemoryStore(workspace)
+        self._backend_started = False
+
+        self.context = ContextBuilder(workspace, timezone=timezone, memory_backend=self.memory_backend)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
@@ -125,6 +131,8 @@ class AgentLoop:
             max_completion_tokens=provider.generation.max_tokens,
         )
         self._register_default_tools()
+        for tool in self.memory_backend.get_tools():
+            self.tools.register(tool)
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
 
@@ -150,6 +158,12 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
+
+    async def _start_backend(self) -> None:
+        """Start the memory backend once (deferred to avoid event-loop issues at __init__)."""
+        if not self._backend_started:
+            await self.memory_backend.start(self.provider)
+            self._backend_started = True
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -277,6 +291,7 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        await self._start_backend()
         logger.info("Agent loop started")
 
         while self._running:
@@ -418,7 +433,16 @@ class AgentLoop:
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
-            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            if self.memory_backend.consolidates_per_turn:
+                turn_messages = all_msgs[1 + len(history):]
+                self._schedule_background(
+                    self.memory_backend.consolidate(turn_messages, key)
+                )
+            self._schedule_background(
+                self.memory_consolidator.maybe_consolidate_by_tokens(
+                    session, skip_llm=self.memory_backend.consolidates_per_turn
+                )
+            )
             return OutboundMessage(channel=channel, chat_id=chat_id,
                                   content=final_content or "Background task completed.")
 
@@ -472,7 +496,16 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        if self.memory_backend.consolidates_per_turn:
+            turn_messages = all_msgs[1 + len(history):]
+            self._schedule_background(
+                self.memory_backend.consolidate(turn_messages, key)
+            )
+        self._schedule_background(
+            self.memory_consolidator.maybe_consolidate_by_tokens(
+                session, skip_llm=self.memory_backend.consolidates_per_turn
+            )
+        )
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
@@ -579,6 +612,7 @@ class AgentLoop:
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
+        await self._start_backend()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
         return await self._process_message(
             msg, session_key=session_key, on_progress=on_progress,
