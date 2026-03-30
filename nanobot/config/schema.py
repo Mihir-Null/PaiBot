@@ -153,6 +153,8 @@ class ToolsConfig(Base):
 class MemoryConfig(Base):
     """Memory backend configuration."""
 
+    model_config = ConfigDict(extra="allow")
+
     backend: str = "default"
 
 

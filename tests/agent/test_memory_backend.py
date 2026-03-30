@@ -17,6 +17,13 @@ def test_memory_config_backend_can_be_set():
     assert cfg.backend == "graphiti"
 
 
+def test_memory_config_accepts_extra_graphiti_section():
+    from nanobot.config.schema import MemoryConfig
+
+    cfg = MemoryConfig(**{"backend": "graphiti", "graphiti": {"graph_db": "kuzu", "top_k": 10}})
+    assert cfg.model_extra["graphiti"] == {"graph_db": "kuzu", "top_k": 10}
+
+
 def test_config_has_memory_field():
     from nanobot.config.schema import Config
 
