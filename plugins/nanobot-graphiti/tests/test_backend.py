@@ -48,3 +48,50 @@ def test_graphiti_config_from_nanobot_config_missing_section():
     cfg = GraphitiConfig._from_nanobot_config(nanobot_config)
     assert cfg.graph_db == "kuzu"
     assert cfg.top_k == 5
+
+
+# ── Backend contract ─────────────────────────────────────────────────────────
+
+def test_graphiti_backend_is_memory_backend():
+    from nanobot.agent.memory import MemoryBackend
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+
+    assert issubclass(GraphitiMemoryBackend, MemoryBackend)
+
+
+def test_graphiti_backend_consolidates_per_turn_is_true():
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+    from nanobot_graphiti.config import GraphitiConfig
+
+    backend = GraphitiMemoryBackend(GraphitiConfig())
+    assert backend.consolidates_per_turn is True
+
+
+async def test_graphiti_backend_start_calls_build_indices(mock_graphiti, mock_provider):
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+    from nanobot_graphiti.config import GraphitiConfig
+
+    backend = GraphitiMemoryBackend(GraphitiConfig(), _graphiti_factory=lambda **kw: mock_graphiti)
+    await backend.start(mock_provider)
+
+    mock_graphiti.build_indices_and_constraints.assert_awaited_once()
+
+
+async def test_graphiti_backend_stop_closes_client(mock_graphiti, mock_provider):
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+    from nanobot_graphiti.config import GraphitiConfig
+
+    backend = GraphitiMemoryBackend(GraphitiConfig(), _graphiti_factory=lambda **kw: mock_graphiti)
+    await backend.start(mock_provider)
+    await backend.stop()
+
+    mock_graphiti.close.assert_awaited_once()
+
+
+async def test_graphiti_backend_stop_is_safe_before_start():
+    """stop() before start() must not raise."""
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+    from nanobot_graphiti.config import GraphitiConfig
+
+    backend = GraphitiMemoryBackend(GraphitiConfig())
+    await backend.stop()  # no exception
