@@ -275,3 +275,34 @@ def test_group_id_user_scope_handles_key_without_colon():
 
     backend = GraphitiMemoryBackend(GraphitiConfig(scope="user"))
     assert backend._get_group_id("directuser") == "directuser"
+
+
+# ── Entry-point factory ───────────────────────────────────────────────────────
+
+def test_from_nanobot_config_creates_backend_with_correct_config():
+    from unittest.mock import MagicMock
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+
+    nanobot_config = MagicMock()
+    nanobot_config.memory.model_extra = {
+        "graphiti": {"graph_db": "kuzu", "top_k": 8, "scope": "session"}
+    }
+
+    backend = GraphitiMemoryBackend.from_nanobot_config(nanobot_config)
+
+    assert isinstance(backend, GraphitiMemoryBackend)
+    assert backend._config.graph_db == "kuzu"
+    assert backend._config.top_k == 8
+    assert backend._config.scope == "session"
+
+
+def test_from_nanobot_config_falls_back_to_defaults_on_empty_config():
+    from unittest.mock import MagicMock
+    from nanobot_graphiti.backend import GraphitiMemoryBackend
+
+    nanobot_config = MagicMock()
+    nanobot_config.memory.model_extra = {}
+
+    backend = GraphitiMemoryBackend.from_nanobot_config(nanobot_config)
+    assert backend._config.graph_db == "kuzu"
+    assert backend._config.top_k == 5
